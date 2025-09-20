@@ -1,0 +1,135 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.integrate import odeint
+
+# 解决中文显示、负号异常及字体问题
+plt.rcParams['font.sans-serif'] = ['SimHei', 'WenQuanYi Zen Hei', 'Times New Roman']
+plt.rcParams['axes.unicode_minus'] = False
+
+def seiar_model(y, t, beta, k, omega, p, gamma, gamma1, N):
+    S, E, I, A, R = y
+    dSdt = -beta * S * (I + k * A) / N
+    dEdt = beta * S * (I + k * A) / N - omega * E
+    dIdt = (1 - p) * omega * E - gamma * I
+    dAdt = p * omega * E - gamma1 * A
+    dRdt = gamma * I + gamma1 * A
+    return [dSdt, dEdt, dIdt, dAdt, dRdt]
+
+def run_seiar(beta, k, omega, p, gamma, gamma1, N, E0=41, I0=10, A0=0, R0=0, days=160):
+    S0 = N - E0 - I0 - A0 - R0
+    y0 = [S0, E0, I0, A0, R0]
+    t = np.linspace(0, days, days)
+    ret = odeint(seiar_model, y0, t, args=(beta, k, omega, p, gamma, gamma1, N))
+    return t, ret
+
+def randomized_coverage(mu=0.4, sigma=0.05, seed=None):
+    np.random.seed(seed)
+    c = np.random.normal(mu, sigma)
+    return np.clip(c, 0.3, 0.5)
+
+def calc_R0(beta, k, p, gamma, gamma1):
+    """计算SEIAR模型的基本再生数 R0（用0替代下标₀避免字体问题）"""
+    R0 = (1 - p) * beta / gamma + p * k * beta / gamma1
+    return R0
+
+if __name__ == "__main__":
+    # 模型基础参数（保持不变）
+    N = 1_000_000  # 总人口
+    beta = 1.1743
+    k = 0.1211
+    omega = 0.53
+    p = 0.14
+    gamma = 0.23    # 原始感染者康复率
+    gamma1 = 0.24   # 原始无症状感染者康复率
+    gamma_new = 0.329  # 干预后感染者康复率
+    gamma1_new = 0.343 # 干预后无症状感染者康复率
+
+    # 1. 计算原始 R0
+    R0_orig = calc_R0(beta, k, p, gamma, gamma1)
+    print(f"原始 R0 = {R0_orig:.3f}")
+    samples = 500
+    R0_intv_list = []
+    for i in range(samples):
+        c = randomized_coverage(seed=i)  # 每次用不同seed生成随机接种率
+        beta_new = beta * (1 - 0.75 * c)
+        k_new = k * (1 - 0.75 * c)
+        R0_intv = calc_R0(beta_new, k_new, p, gamma_new, gamma1_new)
+        R0_intv_list.append(R0_intv)
+
+    # 3. 运行SEIAR模型（无干预 vs 接种干预）
+    t_orig, ret_orig = run_seiar(beta, k, omega, p, gamma, gamma1, N)
+    coverage = randomized_coverage(seed=44)
+    beta_new = beta * (1 - 0.75 * coverage)
+    k_new = k * (1 - 0.75 * coverage)
+    t_intv, ret_intv = run_seiar(beta_new, k_new, omega, p, gamma_new, gamma1_new, N)
+
+    # 4. 绘制第一张图：SEIAR模型 - 无干预场景（独立figure）
+    fig1, ax1 = plt.subplots(1, 1, figsize=(12, 7))  # 单个子图的figure
+    S_o, E_o, I_o, A_o, R_o = ret_orig.T
+
+    ax1.plot(t_orig, S_o, 'c-', label="Susceptible")
+    ax1.plot(t_orig, E_o, 'm-', label="Exposed")
+    ax1.plot(t_orig, I_o, 'r-', label="Infected")
+    ax1.plot(t_orig, A_o, 'b-', label="Asymptomatic")
+    ax1.plot(t_orig, R_o, 'g-', label="Recovered")
+    ax1.set_title("SEIAR Model: No Intervention Scenario", fontsize=14, pad=20)
+    ax1.set_xlabel("Days", fontsize=12)
+    ax1.set_ylabel("Population", fontsize=12)
+    ax1.legend(fontsize=10, loc='upper right', bbox_to_anchor=(0.98, 0.8))
+    ax1.grid(alpha=0.3)
+    param_text_orig = (f"Model Parameters:\n"
+                      f"β = {beta:.4f}\n"
+                      f"k = {k:.4f}\n"
+                      f"ω = {omega:.4f}\n"
+                      f"p = {p:.4f}\n"
+                      f"γ = {gamma:.4f}\n"
+                      f"γ1 = {gamma1:.4f}\n"
+                      f"Original R0 = {R0_orig:.3f}")
+    ax1.text(0.01, 0.1, param_text_orig, transform=ax1.transAxes,
+             bbox=dict(facecolor='white', alpha=0.9, edgecolor='lightgray'),
+             verticalalignment='bottom', fontsize=10)
+    plt.tight_layout()
+    plt.savefig("seiar_model_no_intervention.png", dpi=100, bbox_inches='tight')
+    plt.show()
+
+    # 5. 绘制第二张图：SEIAR模型 - 接种干预场景（独立figure）
+    fig2, ax2 = plt.subplots(1, 1, figsize=(12, 7))  # 单个子图的figure
+    S_i, E_i, I_i, A_i, R_i = ret_intv.T
+    ax2.plot(t_intv, S_i, 'c-', label="Susceptible")
+    ax2.plot(t_intv, E_i, 'm-', label="Exposed")
+    ax2.plot(t_intv, I_i, 'r-', label="Infected")
+    ax2.plot(t_intv, A_i, 'b-', label="Asymptomatic")
+    ax2.plot(t_intv, R_i, 'g-', label="Recovered")
+    ax2.set_title("SEIAR Model: Vaccination Intervention Scenario", fontsize=14, pad=20)
+    ax2.set_xlabel("Days", fontsize=12)
+    ax2.set_ylabel("Population", fontsize=12)
+    ax2.legend(fontsize=10, loc='upper right', bbox_to_anchor=(0.98, 0.8))
+    ax2.grid(alpha=0.3)
+
+    param_text_intv = (f"Post-intervention Parameters:\n"
+                       f"Vaccination rate c = {coverage:.3f}\n"
+                       f"β_new = {beta_new:.4f}\n"
+                       f"k_new = {k_new:.4f}\n"
+                       f"ω = {omega:.4f}\n"
+                       f"p = {p:.4f}\n"
+                       f"γ_new = {gamma_new:.4f}\n"
+                       f"γ1_new = {gamma1_new:.4f}")
+    ax2.text(0.01, 0.1, param_text_intv, transform=ax2.transAxes,
+             bbox=dict(facecolor='white', alpha=0.9, edgecolor='lightgray'),
+             verticalalignment='bottom', fontsize=10)
+    plt.tight_layout()
+    plt.savefig("seiar_model_vaccination_intervention.png", dpi=100, bbox_inches='tight')
+    plt.show()
+
+    # 6. 绘制第三张图：R0 原始 vs 干预后分布（保持不变）
+    plt.figure(figsize=(10, 6))
+    plt.hist(R0_intv_list, bins=30, alpha=0.7, label="Post-intervention R0 Distribution", color="skyblue")
+    plt.axvline(R0_orig, color="red", linestyle="--", linewidth=2, label=f"Original R0 = {R0_orig:.2f}")
+    plt.xlabel("R0 Value", fontsize=12)
+    plt.ylabel("Frequency", fontsize=12)
+    plt.title("Comparison of Original R0 and Post-intervention R0 Distribution", fontsize=14, pad=20)
+    plt.legend(fontsize=10)
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig("r0_distribution_comparison.png", dpi=100, bbox_inches='tight')
+    plt.show()
