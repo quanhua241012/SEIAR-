@@ -1,0 +1,246 @@
+import pandas as pd
+import matplotlib.pyplot as plt
+from scipy.integrate import odeint
+from scipy.optimize import minimize
+import numpy as np
+
+# Matplotlib参数设置
+plt.rcParams['figure.dpi'] = 300
+plt.rcParams['font.sans-serif'] = ['Arial']  # 适配英文显示
+plt.rcParams['axes.unicode_minus'] = False  # 正常显示负号
+plt.rcParams['font.size'] = 9  # 统一基础字体大小
+
+# 数据读取与有效性检查
+df = pd.read_csv('2024-2025按周分布.csv', encoding='gbk')
+df['Time'] = df['YEAR'].astype(str) + '-W' + df['WEEK'].astype(str)
+h3_data = df['A (H3)'].values
+t_span = np.linspace(0, len(df) - 1, len(df))
+n = 4  # 每4个时间点显示一个刻度
+
+if len(h3_data) == 0:
+    raise ValueError("No valid data read. Please check the CSV file and column name 'A (H3)'")
+
+# 模型参数与初始状态
+omega = 0.53    # 潜伏者(E)向感染者转化的速率ω
+p = 0.14        # 潜伏者转化为无症状感染者(A)的比例p
+gamma = 0.23    # 有症状感染者(I)的恢复率γ
+gamma1 = 0.24   # 无症状感染者(A)的恢复率γ1
+population_estimate = max(h3_data.max() * 3, 1000)  # 估计总人口
+
+# 初始状态（避免0值）
+I0 = max(h3_data[0] * 0.7, 1)
+A0 = max(h3_data[0] * 0.3, 1)
+E0 = I0 * 0.5
+R0 = 0
+S0 = population_estimate - E0 - I0 - A0 - R0
+initial_states = [S0, E0, I0, A0, R0]
+
+print("Initial parameter ranges: β ∈ [0.2, 1.5], k ∈ [0.1, 0.8]")
+
+# 微分方程：SEIAR模型导数计算
+def compute_derivative(x, t, beta, k):
+    S, E, I, A, R = x
+    N = S + E + I + A + R  # 总人口
+    interaction = beta * (I + k * A) / N  # 有效接触率
+
+    dSdt = -interaction * S
+    dEdt = interaction * S - omega * E
+    dIdt = (1 - p) * omega * E - gamma * I
+    dAdt = p * omega * E - gamma1 * A
+    dRdt = gamma * I + gamma1 * A
+    return dSdt, dEdt, dIdt, dAdt, dRdt
+
+# 目标函数（最小二乘+正则化）
+def objective_function(params):
+    beta, k = params
+    solution = odeint(compute_derivative, initial_states, t_span, args=(beta, k), rtol=1e-6)
+    predicted_total = solution[:, 2] + solution[:, 3]  # 总感染者(I+A)
+    regularization = 0.01 * (abs(beta - 0.7) + abs(k - 0.5))
+    return np.mean((predicted_total - h3_data) ** 2) + regularization
+
+# 迭代优化函数
+def iterative_optimization(initial_params, bounds, iterations=3):
+    optimized_params = []
+    errors = []
+    current_params = initial_params.copy()
+
+    for i in range(iterations):
+        shrink_factor = 0.7 ** i
+        beta_range = bounds[0][1] - bounds[0][0]
+        k_range = bounds[1][1] - bounds[1][0]
+
+        new_bounds = [
+            [max(bounds[0][0], current_params[0] - beta_range * shrink_factor / 2),
+             min(bounds[0][1], current_params[0] + beta_range * shrink_factor / 2)],
+            [max(bounds[1][0], current_params[1] - k_range * shrink_factor / 2),
+             min(bounds[1][1], current_params[1] + k_range * shrink_factor / 2)]
+        ]
+
+        result = minimize(
+            objective_function,
+            current_params,
+            method='Nelder-Mead',
+            bounds=new_bounds,
+            options={'maxiter': 2000, 'fatol': 1e-4}
+        )
+
+        current_params = result.x
+        optimized_params.append(current_params)
+        errors.append(result.fun)
+        print(f"Iteration {i + 1}/{iterations} | β={current_params[0]:.4f}, k={current_params[1]:.4f} | Error={result.fun:.2f}")
+
+    return optimized_params, errors
+
+# 执行优化
+initial_params = [0.7, 0.5]
+bounds = [(0.2, 1.5), (0.1, 0.8)]
+iterations = 5
+optimized_params, errors = iterative_optimization(initial_params, bounds, iterations)
+
+# 固定参数假拟合（β=1, k=0.5）
+first_beta, first_k = 1.0, 0.5
+solution_first_test = odeint(compute_derivative, initial_states, t_span, args=(first_beta, first_k), rtol=1e-6)
+first_pred_test_total = solution_first_test[:, 2] + solution_first_test[:, 3]
+first_error = np.mean((first_pred_test_total - h3_data) ** 2) + 0.01 * (abs(first_beta - 0.7) + abs(first_k - 0.5))
+
+# 最佳拟合结果
+best_idx = np.argmin(errors)
+best_beta, best_k = optimized_params[best_idx]
+best_error = min(errors)
+
+# 计算预测曲线
+solution_first = odeint(compute_derivative, initial_states, t_span, args=(first_beta, first_k), rtol=1e-6)
+first_pred_total = solution_first[:, 2] + solution_first[:, 3]
+
+solution_opt = odeint(compute_derivative, initial_states, t_span, args=(best_beta, best_k), rtol=1e-6)
+opt_S, opt_E, opt_I, opt_A, opt_R = solution_opt.T
+opt_pred_total = opt_I + opt_A
+
+# 图1：固定参数拟合 vs 实际数据
+plt.figure(figsize=(4, 3))
+ax1 = plt.gca()
+ax1.plot(df['Time'], h3_data, 'o-', label='Actual Data (A(H3))', color='red', alpha=0.8, markersize=4, zorder=3)
+ax1.plot(df['Time'], first_pred_total, '-', label='Fixed Params Fitting', color='orange', linewidth=3, alpha=0.9, zorder=2)
+
+ax1.text(0.02, 0.95,
+         f'Fixed Params\nβ={first_beta:.4f}\nk={first_k:.4f}\nMSE={first_error:.2f}',
+         transform=ax1.transAxes, fontsize=8, bbox=dict(boxstyle='round,pad=0.3', facecolor='wheat', alpha=0.7))
+
+ax1.set_title('Fixed Parameters Fitting vs Actual Data', fontsize=10, pad=10)
+ax1.set_ylabel('Number of People', fontsize=9)
+ax1.legend(loc='best', fontsize=8)
+ax1.grid(linestyle='--', alpha=0.7)
+ax1.set_xticks(df['Time'][::n])
+ax1.set_xticklabels(df['Time'][::n], rotation=45, ha='right', fontsize=7)
+ax1.tick_params(axis='y', labelsize=8)
+
+y_min = min(min(h3_data), min(first_pred_total)) * 0.9
+y_max = max(max(h3_data), max(first_pred_total)) * 1.1
+ax1.set_ylim(y_min, y_max)
+
+plt.tight_layout()
+plt.savefig('1_Fixed_Params_Fitting_vs_Actual_Data.png', dpi=300, bbox_inches='tight')
+plt.show()
+
+# 图2：最佳拟合 vs 实际数据
+plt.figure(figsize=(8, 4))
+ax2 = plt.gca()
+ax2.plot(df['Time'], h3_data, 'o-', label='Actual Data (A(H3))', color='red', alpha=0.8, markersize=4)
+ax2.plot(df['Time'], opt_pred_total, '-', label='Best Fitting', color='blue', linewidth=2)
+
+ax2.text(0.02, 0.95,
+         f'Best Fitting Params\nβ={best_beta:.4f}\nk={best_k:.4f}\nMSE={best_error:.2f}',
+         transform=ax2.transAxes, fontsize=8, bbox=dict(boxstyle='round,pad=0.3', facecolor='lightblue', alpha=0.7))
+
+ax2.set_title('Best SEIAR Fitting vs Actual Data', fontsize=11, pad=12)
+ax2.set_ylabel('Number of People', fontsize=9)
+ax2.legend(loc='best', fontsize=8)
+ax2.grid(linestyle='--', alpha=0.7)
+ax2.set_xticks(df['Time'][::n])
+ax2.set_xticklabels(df['Time'][::n], rotation=45, ha='right', fontsize=7)
+ax2.tick_params(axis='y', labelsize=8)
+ax2.set_ylim(y_min, y_max)
+
+plt.tight_layout()
+plt.savefig('2_Best_Fitting_vs_Actual_Data.png', dpi=300, bbox_inches='tight')
+plt.show()
+
+# 图3：SEIAR模型人群动态（最佳拟合）
+plt.figure(figsize=(8, 3))
+ax3 = plt.gca()
+ax3.plot(df['Time'], opt_S, '-', label='Susceptible (S)', color='#1f77b4', linewidth=2)
+ax3.plot(df['Time'], opt_E, '-', label='Exposed (E)', color='#ff7f0e', linewidth=2)
+ax3.plot(df['Time'], opt_I, '-', label='Symptomatic (I)', color='#d62728', linewidth=2)
+ax3.plot(df['Time'], opt_A, '-', label='Asymptomatic (A)', color='#2ca02c', linewidth=2)
+ax3.plot(df['Time'], opt_R, '-', label='Recovered (R)', color='#9467bd', linewidth=2)
+ax3.plot(df['Time'], opt_pred_total, 'k--', label='Total Infected (I+A)', linewidth=2.5, alpha=0.9)
+
+ax3.text(0.02, 0.55,
+         f'Model Params (Best Fit)\nβ={best_beta:.4f} | k={best_k:.4f}\nω={omega:.2f} | p={p:.2f}\nγ={gamma:.2f} | γ1={gamma1:.2f}',
+         transform=ax3.transAxes, fontsize=7, bbox=dict(boxstyle='round,pad=0.3', facecolor='lightgray', alpha=0.7))
+
+ax3.set_title('SEIAR Model Population Dynamics (Best Fit)', fontsize=11, pad=12)
+ax3.set_ylabel('Number of People', fontsize=9)
+ax3.legend(loc='center right', fontsize=7)
+ax3.grid(linestyle='--', alpha=0.7)
+ax3.set_xticks(df['Time'][::5])
+ax3.set_xticklabels(df['Time'][::5], rotation=45, ha='right', fontsize=7)
+ax3.tick_params(axis='y', labelsize=8)
+
+plt.tight_layout()
+plt.savefig('3_SEIAR_Population_Dynamics.png', dpi=300, bbox_inches='tight')
+plt.show()
+
+# 图4：固定参数拟合 + 最佳拟合 + 实际数据（注释移至左上角并缩小）
+plt.figure(figsize=(8, 4))
+ax4 = plt.gca()
+
+# 实际数据（最上层）
+ax4.plot(df['Time'], h3_data, 'o-', label='Actual Data (A(H3))',
+         color='red', alpha=0.8, markersize=4, zorder=4)
+# 固定参数拟合
+ax4.plot(df['Time'], first_pred_total, '-', label='Fixed Params Fitting',
+         color='orange', linewidth=3, alpha=0.8, zorder=2)
+# 最佳拟合
+ax4.plot(df['Time'], opt_pred_total, '-', label='Best Fitting',
+         color='blue', linewidth=2, alpha=0.9, zorder=3)
+
+# 精度对比注释（移到左上角，缩小字体）
+error_diff = first_error - best_error
+ax4.text(
+    0.01, 0.96,  # 左上角位置（相对于坐标轴的比例）
+    f'Fitting Accuracy Comparison\nFixed Params MSE: {first_error:.2f}\nBest Fitting MSE: {best_error:.2f}\nError Reduction: {error_diff:.2f} ({error_diff / first_error * 100:.1f}%)',
+    transform=ax4.transAxes,
+    fontsize=7,        # 缩小字体
+    verticalalignment='top',  # 垂直对齐方式改为“顶部”
+    bbox=dict(boxstyle='round,pad=0.3', facecolor='lightgreen', alpha=0.7)
+)
+
+ax4.set_title('Fixed Params vs Best SEIAR Fitting (with Actual Data)', fontsize=11, pad=12)
+ax4.set_ylabel('Total Infected People', fontsize=9)
+ax4.legend(loc='best', fontsize=8)
+ax4.grid(linestyle='--', alpha=0.7)
+ax4.set_xticks(df['Time'][::n])
+ax4.set_xticklabels(df['Time'][::n], rotation=45, ha='right', fontsize=7)
+ax4.tick_params(axis='y', labelsize=8)
+ax4.set_ylim(y_min, y_max)
+
+plt.tight_layout()
+plt.savefig('4_Fixed_vs_Best_Fitting_with_Actual.png', dpi=300, bbox_inches='tight')
+plt.show()
+
+# 输出优化总结
+print("\n" + "=" * 70)
+print("SEIAR Model Parameter Optimization Summary")
+print("=" * 70)
+print(f"Fixed Parameters  - Transmission Rate β: {first_beta:.4f}")
+print(f"Fixed Parameters  - Asymptomatic Ratio k: {first_k:.4f}")
+print(f"Fixed Parameters  - Mean Squared Error (MSE): {first_error:.2f}")
+print("-" * 70)
+print(f"Best Fitting      - Transmission Rate β: {best_beta:.4f}")
+print(f"Best Fitting      - Asymptomatic Ratio k: {best_k:.4f}")
+print(f"Best Fitting      - Mean Squared Error (MSE): {best_error:.2f}")
+print("-" * 70)
+print(f"Optimization Effect - Error Reduction: {error_diff:.2f}")
+print(f"Optimization Effect - Error Reduction Rate: {error_diff / first_error * 100:.1f}%")
+print("=" * 70)
