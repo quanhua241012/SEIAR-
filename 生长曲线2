@@ -1,0 +1,129 @@
+%% =======================
+%% Complete MATLAB Script
+%% =======================
+
+clc; clear; close all;
+
+%% 加载实验数据
+try
+    data = readtable('0920生长曲线汇总.xlsx');
+catch e
+    error('无法加载文件 "0920生长曲线汇总.xlsx": %s', e.message);
+end
+
+% 验证列数（现在包括第20列LGG）
+if size(data, 2) < 20
+    error('数据表列数少于20列，请检查输入文件。');
+end
+
+% 时间列
+time = data{:,1};
+if ~isnumeric(time) || any(isnan(time))
+    error('时间列包含非数值或NaN值，请检查数据。');
+end
+
+% 分组定义（添加LGG列）
+group_cols = {2:4, 5:7, 8:10, 11:13, 14:16, 17:19, 20}; % LGG为单列
+groups = {'PG4', 'RNA1-3', 'TlpA', 'PG4ery', 'RNA1-3ery', 'TlpAery', 'LGG'};
+nGroups = numel(groups);
+
+%% 计算组平均值
+y_avg = zeros(size(time,1), nGroups);
+for i = 1:nGroups-1 % 前6组为多列平均
+    y_avg(:,i) = mean(data{:,group_cols{i}}, 2, 'omitnan');
+end
+y_avg(:,nGroups) = data{:,group_cols{end}}; % LGG为单列，直接赋值
+
+%% Gompertz模型函数
+gompertz = @(b, t) b(3) * exp(-exp(b(2)*exp(1)/b(3) * (b(1)-t) + 1));
+
+%% 存储拟合参数
+fit_params = zeros(nGroups, 3);
+
+% 颜色
+colors = lines(max(nGroups, 7));
+
+%% 绘图分组
+plot_groups = {
+    [1, 4, 7], % PG4, PG4ery, LGG
+    [2, 5, 7], % RNA1-3, RNA1-3ery, LGG
+    [3, 6, 7]  % TlpA, TlpAery, LGG
+};
+plot_titles = {
+    'Bacterial Growth Prediction (PG4, PG4ery, LGG)',
+    'Bacterial Growth Prediction (RNA1-3, RNA1-3ery, LGG)',
+    'Bacterial Growth Prediction (TlpA, TlpAery, LGG)'
+};
+
+%% 绘制三幅图
+for fig_idx = 1:numel(plot_groups)
+    figure('Name', plot_titles{fig_idx}, 'Color', 'w'); hold on;
+    
+    % 当前分组的索引
+    curr_groups = plot_groups{fig_idx};
+    
+    for idx = curr_groups
+        % 当前组平均值
+        y_valid = y_avg(:,idx);
+        
+        % 移除NaN值
+        validIdx = ~isnan(y_valid);
+        if sum(validIdx) < 3
+            warning('组 %s 数据点不足以进行拟合，跳过。', groups{idx});
+            continue;
+        end
+        t_valid = time(validIdx);
+        y_valid = y_valid(validIdx);
+        
+        % 初始猜测 [t0, r, K]
+        guess = [5, 0.2, max(y_valid)];
+        
+        % 拟合边界
+        lb = [0, 0, 0];
+        ub = [max(time), 1, 2*max(y_valid)];
+        
+        % 拟合Gompertz曲线
+        opts = optimset('Display', 'off');
+        b = lsqcurvefit(gompertz, guess, t_valid, y_valid, lb, ub, opts);
+        fit_params(idx,:) = b;
+        
+        % 检查不稳定参数
+        if b(3) < 1e-3 || b(2) < 1e-3
+            warning('组 %s: 拟合参数可能不稳定 (K=%.4f, r=%.4f)。', groups{idx}, b(3), b(2));
+        end
+        
+        % 预测曲线到60小时
+        t_future = linspace(0, 66, 300);
+        y_pred = gompertz(b, t_future);
+        
+        % 绘制Gompertz拟合曲线（仅曲线，不含数据点）
+        plot(t_future, y_pred, '-', 'LineWidth', 2, 'Color', colors(idx,:), ...
+            'DisplayName', groups{idx});
+    end
+    
+    xlabel('Time(h)');
+    ylabel('OD');
+    title(plot_titles{fig_idx});
+    set(gca, 'XTick', 0:6:66); % X轴刻度间隔4小时
+    legend('Location', 'southeast', 'FontSize', 8); % 图例在东南角
+    grid on;
+end
+
+%% 打印参数表
+fprintf('组名\t\t拐点t0\t\t生长速率r\t\tK值\n');
+fprintf('-------------------------------------------------\n');
+for i = 1:nGroups
+    fprintf('%s\t\t%.4f\t\t%.4f\t\t%.4f\n', groups{i}, fit_params(i,1), fit_params(i,2), fit_params(i,3));
+end
+
+%% 保存参数表
+T = array2table(fit_params, 'VariableNames', {'t0', 'r', 'K'}, 'RowNames', groups);
+try
+    writetable(T, 'Gompertz_Fit_Parameters.csv', 'WriteRowNames', true);
+catch e
+    warning('无法保存参数表: %s', e.message);
+end
+
+%% =======================
+%% End of Script
+%% =======================
