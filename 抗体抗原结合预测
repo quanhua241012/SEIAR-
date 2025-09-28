@@ -1,0 +1,49 @@
+% ============================
+% 模拟抗体-抗原结合模型 (Langmuir binding)
+% θ = [Ag] / (Kd / [Ab] + [Ag])
+% ============================
+
+% 抗体浓度列表 (单位: M)
+Ab_list = [50e-9, 100e-9, 500e-9, 1e-6];  % 50 nM – 1 µM
+% 抗原浓度范围 (单位: M)
+Ag_list = logspace(-13, -8, 100);  % 0.1 pM – 10 nM
+% 解离常数 (Kd) 单位: M，来自ZDOCK + PRODIGY
+Kd = 6.8e-9;
+
+% 创建图形
+figure;
+hold on;
+
+% 循环绘制每种抗体浓度对应的结合曲线
+for i = 1:length(Ab_list)
+    Ab = Ab_list(i);
+    theta = Ag_list ./ (Kd / Ab + Ag_list);  % Langmuir 公式
+    plot(Ag_list*1e9, theta, 'LineWidth', 2);  % 转为 nM 作图
+end
+
+
+% Add points at x=10^0 (1 nM) for each curve
+x_point = 1;  % 1 nM
+colors = get(gca, 'ColorOrder');
+for j = 1:length(Ab_list)  % 使用不同的循环变量 j
+    Ab = Ab_list(j);
+    Ag_point = x_point * 1e-9;  % Convert back to M
+    theta_point = Ag_point / (Kd / Ab + Ag_point);
+    plot(x_point, theta_point, 'o', 'MarkerSize', 8, 'LineWidth', 2, ...
+        'MarkerFaceColor', colors(j,:), ...  % 使用 j 而不是 i
+        'MarkerEdgeColor', 'k');
+end
+
+% Figure settings
+xlabel('[Ag] (nM)', 'FontSize', 12);
+ylabel('Binding Ratio \theta', 'FontSize', 12);
+title('Antibody-Antigen Binding Prediction', 'FontSize', 14);
+legend({'[Ab] = 50 nM', '[Ab] = 100 nM', '[Ab] = 500 nM', '[Ab] = 1 µM'}, 'Location', 'northwest');
+set(gca, 'XScale', 'log');
+grid off;
+xlim([0.1 10]);
+
+
+
+% 可选：保存图像
+% saveas(gcf, 'binding_curve_theta_vs_Ag.png');
