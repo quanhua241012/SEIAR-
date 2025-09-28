@@ -1,0 +1,44 @@
+% Gompertz模型函数
+gompertz = @(b, t) b(3) * exp(-exp(b(2)*exp(1)/b(3)*(b(1) - t) + 1));
+
+% 每组Gompertz参数: [t0, r, K]
+gompertz_params = [
+    7.3302, 0.1328, 1.3827;
+    8.1211, 0.1494, 1.3644;
+    8.4720, 0.1449, 1.3917;
+    8.6425, 0.1375, 1.4403;
+    8.2511, 0.1566, 1.3089;
+    8.4264, 0.1403, 1.3695
+];
+
+% 时间范围：0到36小时
+t_future = linspace(0, 36, 300);
+
+% 颜色
+colors = lines(6);
+
+% 绘图
+figure('Name', '所有组 Gompertz预测曲线', 'Color', 'w'); hold on;
+for i = 1:6
+    bG = gompertz_params(i, :);
+    N_pred = gompertz(bG, t_future);
+    plot(t_future, N_pred, 'LineWidth', 2, 'Color', colors(i,:), ...
+        'DisplayName', sprintf('Group %d (K=%.3f, t₀=%.2f)', i, bG(3), bG(1)));
+end
+xlabel('Time（h）');
+ylabel('OD');
+title('Future Growth Prediction for 6 Bacterial Groups (Gompertz Model)');
+legend('Location', 'southeast');
+grid on;
+
+% 输出参数表（显示K和t0）
+fprintf('组别\tK值\t\tt₀ (拐点时间)\n');
+fprintf('-------------------------------\n');
+for i = 1:6
+    fprintf('组 %d\t%.4f\t\t%.4f\n', i, gompertz_params(i,3), gompertz_params(i,1));
+end
+
+% （可选）保存表格
+T = table((1:6)', gompertz_params(:,3), gompertz_params(:,1), ...
+    'VariableNames', {'组别','K值','拐点时间_t0'});
+writetable(T, 'Gompertz_参数预测表.csv');
